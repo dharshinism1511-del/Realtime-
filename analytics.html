@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Analytics — TaxiPulse{% endblock %}
+
+{% block extra_head %}
+<style>
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+}
+.charts-grid .panel { animation: fadeUp 0.6s ease backwards; }
+.charts-grid .panel:nth-child(1) { animation-delay: 0.05s; }
+.charts-grid .panel:nth-child(2) { animation-delay: 0.15s; }
+.charts-grid .panel:nth-child(3) { animation-delay: 0.25s; }
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+th {
+  background: rgba(0,0,0,0.3);
+  color: var(--cyan);
+  padding: 12px;
+  text-align: left;
+  border-bottom: 2px solid rgba(34,211,238,0.3);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+td {
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+tr:hover td { background: rgba(34, 211, 238, 0.04); }
+
+.rank-badge {
+  display: inline-block;
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--cyan), var(--purple));
+  color: #fff;
+  text-align: center;
+  line-height: 26px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-right: 10px;
+}
+
+@media (max-width: 900px) {
+  .charts-grid { grid-template-columns: 1fr; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Deep Analytics</h1>
+    <p>Detailed revenue & demand intelligence</p>
+  </div>
+</div>
+
+<!-- CHARTS -->
+<section class="charts-grid">
+  <div class="panel">
+    <h3>💰 Revenue by Zone</h3>
+    <canvas id="chartRevenue" height="220"></canvas>
+  </div>
+  <div class="panel">
+    <h3>📅 Demand by Day of Week</h3>
+    <canvas id="chartDay" height="220"></canvas>
+  </div>
+</section>
+
+<!-- PEAK ZONES TABLE -->
+<p class="section-title">Strategic Insights</p>
+<section class="panel">
+  <h3>🔥 Peak Zones — Highest Avg Fare</h3>
+  <table id="peakTable">
+    <thead>
+      <tr><th>Rank</th><th>Zone</th><th>Avg Fare</th><th>Total Trips</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+Chart.defaults.color = "#94a3b8";
+Chart.defaults.font.family = "Outfit";
+Chart.defaults.font.size = 12;
+
+function gradient(ctx, c1, c2) {
+  const g = ctx.createLinearGradient(0, 0, 0, 300);
+  g.addColorStop(0, c1); g.addColorStop(1, c2);
+  return g;
+}
+
+async function loadAnalytics() {
+  const r = await (await fetch("/api/revenue-zone")).json();
+  const ctxR = document.getElementById("chartRevenue").getContext("2d");
+  new Chart(ctxR, {
+    type: "bar",
+    data: { labels: r.labels, datasets: [{
+      data: r.values,
+      backgroundColor: gradient(ctxR, "#f59e0b", "#ec4899"),
+      borderRadius: 8, borderSkipped: false, barThickness: 22
+    }]},
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: "#64748b", font: { size: 11 } } },
+        y: { grid: { color: "rgba(255,255,255,0.05)" }, beginAtZero: true, ticks: { color: "#64748b" } }
+      }
+    }
+  });
+
+  const d = await (await fetch("/api/daily")).json();
+  const ctxD = document.getElementById("chartDay").getContext("2d");
+  new Chart(ctxD, {
+    type: "bar",
+    data: { labels: d.labels, datasets: [{
+      data: d.values,
+      backgroundColor: gradient(ctxD, "#10b981", "#22d3ee"),
+      borderRadius: 8, borderSkipped: false, barThickness: 26
+    }]},
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: "#64748b" } },
+        y: { grid: { color: "rgba(255,255,255,0.05)" }, beginAtZero: true, ticks: { color: "#64748b" } }
+      }
+    }
+  });
+
+  const peaks = await (await fetch("/api/peak-zones")).json();
+  const tb = document.querySelector("#peakTable tbody");
+  tb.innerHTML = peaks.map((p, i) => `
+    <tr>
+      <td><span class="rank-badge">${i + 1}</span></td>
+      <td><strong>${p.zone}</strong></td>
+      <td style="color:#22d3ee; font-weight:700;">₹${p.avg_fare}</td>
+      <td>${p.trips}</td>
+    </tr>
+  `).join("");
+}
+
+document.addEventListener("DOMContentLoaded", loadAnalytics);
+</script>
+{% endblock %}
