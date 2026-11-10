@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}Live Map — TaxiPulse{% endblock %}
+
+{% block extra_head %}
+<style>
+.live-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, rgba(34,211,238,0.1), rgba(168,85,247,0.08));
+  border: 1px solid rgba(34,211,238,0.25);
+  border-radius: 16px;
+  margin-bottom: 24px;
+}
+.live-header .status {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 14px; font-weight: 600;
+  color: #34d399;
+}
+.live-header .status .dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 12px #34d399;
+  animation: blink 1.5s infinite;
+}
+@keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+.live-header .stats {
+  display: flex;
+  gap: 32px;
+}
+.live-header .stat {
+  text-align: right;
+}
+.live-header .stat-label {
+  font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 1px;
+}
+.live-header .stat-value {
+  font-size: 22px; font-weight: 700; color: var(--cyan);
+  font-family: monospace;
+}
+
+/* Zone grid */
+.zone-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 18px;
+}
+
+.zone-card {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: zoomIn 0.5s ease backwards;
+}
+@keyframes zoomIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.zone-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 4px; height: 100%;
+  background: linear-gradient(180deg, var(--cyan), var(--purple));
+  opacity: 0.5;
+}
+
+.zone-card.hot::before {
+  background: linear-gradient(180deg, var(--pink), #f43f5e);
+  opacity: 1;
+}
+
+.zone-card.hot {
+  border-color: rgba(236, 72, 153, 0.5);
+  background: linear-gradient(135deg, rgba(236,72,153,0.12), rgba(168,85,247,0.08));
+  box-shadow: 0 0 30px rgba(236, 72, 153, 0.2);
+}
+
+.zone-card.hot::after {
+  content: "🔥";
+  position: absolute;
+  top: 12px; right: 14px;
+  font-size: 18px;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%,100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+.zone-card .top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.zone-card .zone-name {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.zone-card .zone-count {
+  font-size: 42px;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--cyan), var(--blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  line-height: 1;
+}
+.zone-card.hot .zone-count {
+  background: linear-gradient(135deg, var(--pink), var(--purple));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.progress {
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 14px;
+}
+.progress-bar {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--cyan), var(--purple));
+  transition: width 0.8s ease;
+}
+.zone-card.hot .progress-bar {
+  background: linear-gradient(90deg, var(--pink), var(--purple));
+}
+
+.zone-status {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.zone-card.hot .zone-status { color: var(--pink); }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Live Map</h1>
+    <p>Real-time demand across all zones — updates every 3 seconds</p>
+  </div>
+</div>
+
+<!-- LIVE HEADER -->
+<div class="live-header">
+  <div class="status">
+    <div class="dot"></div>
+    STREAMING LIVE
+  </div>
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Active Rides</div>
+      <div class="stat-value" id="totalRides">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Updated</div>
+      <div class="stat-value" id="lastUpdate">--:--:--</div>
+    </div>
+  </div>
+</div>
+
+<!-- ZONES -->
+<p class="section-title">Demand by Zone</p>
+<section class="zone-grid" id="zoneGrid"></section>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let firstLoad = true;
+const MAX_DEMAND = 10;
+
+async function liveDemand() {
+  const d = await (await fetch("/api/live")).json();
+
+  document.getElementById("totalRides").textContent = d.total;
+  document.getElementById("lastUpdate").textContent = d.time;
+
+  const grid = document.getElementById("zoneGrid");
+
+  if (firstLoad) {
+    grid.innerHTML = "";
+    Object.entries(d.demand).forEach(([zone], i) => {
+      const card = document.createElement("div");
+      card.className = "zone-card";
+      card.dataset.zone = zone;
+      card.style.animationDelay = (i * 0.06) + "s";
+      card.innerHTML = `
+        <div class="top-row">
+          <span class="zone-name">${zone}</span>
+          <span class="zone-count">0</span>
+        </div>
+        <div class="progress"><div class="progress-bar" style="width:0%"></div></div>
+        <div class="zone-status">Waiting…</div>
+      `;
+      grid.appendChild(card);
+    });
+    firstLoad = false;
+  }
+
+  Object.entries(d.demand).forEach(([zone, count]) => {
+    const card = grid.querySelector(`[data-zone="${zone}"]`);
+    if (!card) return;
+
+    card.querySelector(".zone-count").textContent = count;
+    const pct = Math.min((count / MAX_DEMAND) * 100, 100);
+    card.querySelector(".progress-bar").style.width = pct + "%";
+
+    const status = count >= 6 ? "HIGH DEMAND" :
+                   count >= 3 ? "Moderate" : "Low";
+    card.querySelector(".zone-status").textContent = status;
+
+    card.classList.toggle("hot", count >= 6);
+  });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  liveDemand();
+  setInterval(liveDemand, 3000);
+});
+</script>
+{% endblock %}
