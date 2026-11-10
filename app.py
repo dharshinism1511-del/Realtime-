@@ -1,43 +1,26 @@
-"""
-============================================================
- Real-Time Taxi Demand & Mobility Analytics
- Backend Model — Flask + Pandas
-============================================================
-"""
-
 from flask import Flask, render_template, jsonify
 import pandas as pd
 import numpy as np
-import random
-import os
+import random, os
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ============================================================
-# 1. DATASET GENERATION (runs only once)
-# ============================================================
 DATASET = "taxi_trips.csv"
 ZONES = ["Downtown", "Airport", "Midtown", "Uptown",
          "Station", "Mall", "University"]
 
-def generate_dataset(n_rows=5000):
-    """Create a realistic taxi trip dataset if not present."""
+# ---------- Generate dataset ----------
+if not os.path.exists(DATASET):
     np.random.seed(42)
     random.seed(42)
     base = datetime(2024, 1, 1)
     rows = []
-
-    for i in range(n_rows):
+    for i in range(5000):
         ts = base + timedelta(minutes=random.randint(0, 60 * 24 * 30))
-        hour = ts.hour
-
-        # Realistic demand pattern: peaks at 8-10 AM and 5-8 PM
-        if 8 <= hour <= 10 or 17 <= hour <= 20:
-            zone = random.choice(["Downtown", "Midtown", "Station", "Airport"])
-        else:
-            zone = random.choice(ZONES)
-
+        h = ts.hour
+        zone = random.choice(["Downtown", "Midtown", "Station", "Airport"]) \
+            if (8 <= h <= 10 or 17 <= h <= 20) else random.choice(ZONES)
         rows.append({
             "trip_id": i + 1,
             "pickup_datetime": ts.strftime("%Y-%m-%d %H:%M:%S"),
@@ -47,102 +30,88 @@ def generate_dataset(n_rows=5000):
             "trip_distance_km": round(random.uniform(0.5, 25.0), 2),
             "payment_type": random.choice(["Cash", "Card", "UPI"]),
         })
-
     pd.DataFrame(rows).to_csv(DATASET, index=False)
-    print(f"✅ Generated {DATASET} with {n_rows} rows")
 
+# ---------- Load data ----------
+DF = pd.read_csv(DATASET)
+DF["pickup_datetime"] = pd.to_datetime(DF["pickup_datetime"])
+DF["hour"] = DF["pickup_datetime"].dt.hour
+DF["day"] = DF["pickup_datetime"].dt.day_name()
 
-if not os.path.exists(DATASET):
-    generate_dataset()
+# ---------- Global stats (for sidebar) ----------
+STATS = {
+    "total_trips": len(DF),
+    "revenue": round(DF["fare_amount"].sum(), 2),
+    "avg_fare": round(DF["fare_amount"].mean(), 2),
+    "avg_dist": round(DF["trip_distance_km"].mean(), 2),
+}
 
-
-# ============================================================
-# 2. LOAD & PREPARE DATA (Pandas model)
-# ============================================================
-def load_data():
-    df = pd.read_csv(DATASET)
-    df["pickup_datetime"] = pd.to_datetime(df["pickup_datetime"])
-    df["hour"] = df["pickup_datetime"].dt.hour
-    df["day"] = df["pickup_datetime"].dt.day_name()
-    return df
-
-DF = load_data()
-
-
-# ============================================================
-# 3. ROUTES
-# ============================================================
+# ---------- Page routes ----------
 @app.route("/")
-def home():
-    """Render the dashboard with KPI stats."""
-    return render_template(
-        "index.html",
-        total_trips=len(DF),
-        revenue=round(DF["fare_amount"].sum(), 2),
-        avg_fare=round(DF["fare_amount"].mean(), 2),
-        avg_dist=round(DF["trip_distance_km"].mean(), 2),
-    )
+def dashboard():
+    return render_template("dashboard.html", active="dashboard", **STATS)
 
+@app.route("/analytics")
+def analytics():
+    return render_template("analytics.html", active="analytics", **STATS)
 
-# ---------- API 1: Demand by hour ----------
+@app.route("/live")
+def live():
+    return render_template("live.html", active="live", **STATS)
+
+# ---------- APIs ----------
 @app.route("/api/hourly")
 def api_hourly():
-    counts = DF.groupby("hour").size().reindex(range(24), fill_value=0)
-    return jsonify({
-        "labels": [f"{h:02d}:00" for h in counts.index],
-        "values": counts.tolist(),
-    })
+    c = DF.groupby("hour").size().reindex(range(24), fill_value=0)
+    return jsonify({"labels": [f"{h:02d}:00" for h in c.index], "values": c.tolist()})
 
-
-# ---------- API 2: Demand by zone ----------
 @app.route("/api/zones")
 def api_zones():
-    counts = DF["pickup_zone"].value_counts()
-    return jsonify({
-        "labels": counts.index.tolist(),
-        "values": counts.tolist(),
-    })
+    c = DF["pickup_zone"].value_counts()
+    return jsonify({"labels": c.index.tolist(), "values": c.tolist()})
 
-
-# ---------- API 3: Payment split ----------
 @app.route("/api/payment")
 def api_payment():
-    counts = DF["payment_type"].value_counts()
-    return jsonify({
-        "labels": counts.index.tolist(),
-        "values": counts.tolist(),
-    })
+    c = DF["payment_type"].value_counts()
+    return jsonify({"labels": c.index.tolist(), "values": c.tolist()})
 
-
-# ---------- API 4: Demand by day ----------
 @app.route("/api/daily")
 def api_daily():
-    order = ["Monday", "Tuesday", "Wednesday", "Thursday",
-             "Friday", "Saturday", "Sunday"]
-    counts = DF.groupby("day").size().reindex(order, fill_value=0)
-    return jsonify({
-        "labels": counts.index.tolist(),
-        "values": counts.tolist(),
-    })
+    order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+    c = DF.groupby("day").size().reindex(order, fill_value=0)
+    return jsonify({"labels": c.index.tolist(), "values": c.tolist()})
 
+@app.route("/api/revenue-zone")
+def api_revenue_zone():
+    r = DF.groupby("pickup_zone")["fare_amount"].sum().sort_values(ascending=False)
+    return jsonify({"labels": r.index.tolist(), "values": [round(v, 2) for v in r.values]})
 
-# ---------- API 5: Real-time live demand (simulated) ----------
+@app.route("/api/peak-zones")
+def api_peak_zones():
+    g = DF.groupby("pickup_zone").agg(
+        avg_fare=("fare_amount", "mean"),
+        trips=("trip_id", "count")
+    ).sort_values("avg_fare", ascending=False).head(5)
+    return jsonify([
+        {"zone": z, "avg_fare": round(r.avg_fare, 2), "trips": int(r.trips)}
+        for z, r in g.iterrows()
+    ])
+
 @app.route("/api/live")
 def api_live():
-    """
-    Simulated real-time demand.
-    In production this would be fed by Kafka + PySpark streaming.
-    """
-    demand = {zone: int(np.random.poisson(3)) for zone in ZONES}
+    demand = {z: int(np.random.poisson(3)) for z in ZONES}
     return jsonify({
         "time": datetime.now().strftime("%H:%M:%S"),
         "demand": demand,
-        "total": sum(demand.values()),
+        "total": sum(demand.values())
     })
 
+@app.route("/api/recent")
+def api_recent():
+    r = DF.sort_values("pickup_datetime", ascending=False).head(10)
+    return jsonify(r[["trip_id","pickup_datetime","pickup_zone",
+                     "dropoff_zone","fare_amount","payment_type"]]
+                   .astype(str).to_dict(orient="records"))
 
-# ============================================================
-# 4. RUN
-# ============================================================
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
